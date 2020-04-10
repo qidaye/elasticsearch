@@ -41,6 +41,8 @@ import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.ParseContext;
 import org.elasticsearch.index.mapper.StringFieldType;
 import org.elasticsearch.index.query.QueryShardContext;
+import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
+import org.elasticsearch.search.aggregations.support.ValuesSourceType;
 
 import java.io.IOException;
 import java.util.Collection;
@@ -119,6 +121,11 @@ public final class ParentIdFieldMapper extends FieldMapper {
         }
 
         @Override
+        public ValuesSourceType getValuesSourceType() {
+            return CoreValuesSourceType.BYTES;
+        }
+
+        @Override
         public Object valueForDisplay(Object value) {
             if (value == null) {
                 return null;
@@ -194,8 +201,8 @@ public final class ParentIdFieldMapper extends FieldMapper {
 
 
     @Override
-    protected void doMerge(Mapper mergeWith, boolean updateAllTypes) {
-        super.doMerge(mergeWith, updateAllTypes);
+    protected void doMerge(Mapper mergeWith) {
+        super.doMerge(mergeWith);
         ParentIdFieldMapper parentMergeWith = (ParentIdFieldMapper) mergeWith;
         this.children = parentMergeWith.children;
     }

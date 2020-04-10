@@ -20,12 +20,10 @@
 package org.elasticsearch.painless;
 
 import junit.framework.AssertionFailedError;
-
 import org.apache.lucene.util.Constants;
 import org.elasticsearch.script.ScriptException;
 
 import java.lang.invoke.WrongMethodTypeException;
-import java.util.Arrays;
 import java.util.Collections;
 
 import static java.util.Collections.emptyMap;
@@ -131,7 +129,7 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
 
     public void testBogusParameter() {
         IllegalArgumentException expected = expectThrows(IllegalArgumentException.class, () -> {
-            exec("return 5;", null, Collections.singletonMap("bogusParameterKey", "bogusParameterValue"), null, true);
+            exec("return 5;", null, Collections.singletonMap("bogusParameterKey", "bogusParameterValue"), true);
         });
         assertTrue(expected.getMessage().contains("Unrecognized compile-time parameter"));
     }
@@ -201,26 +199,11 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
                    "The maximum number of statements that can be executed in a loop has been reached."));
     }
 
-    public void testSourceLimits() {
-        final char[] tooManyChars = new char[Compiler.MAXIMUM_SOURCE_LENGTH + 1];
-        Arrays.fill(tooManyChars, '0');
-
-        IllegalArgumentException expected = expectScriptThrows(IllegalArgumentException.class, false, () -> {
-            exec(new String(tooManyChars));
-        });
-        assertTrue(expected.getMessage().contains("Scripts may be no longer than"));
-
-        final char[] exactlyAtLimit = new char[Compiler.MAXIMUM_SOURCE_LENGTH];
-        Arrays.fill(exactlyAtLimit, '0');
-        // ok
-        assertEquals(0, exec(new String(exactlyAtLimit)));
-    }
-
     public void testIllegalDynamicMethod() {
         IllegalArgumentException expected = expectScriptThrows(IllegalArgumentException.class, () -> {
             exec("def x = 'test'; return x.getClass().toString()");
         });
-        assertTrue(expected.getMessage().contains("Unable to find dynamic method"));
+        assertTrue(expected.getMessage().contains("dynamic method [java.lang.String, getClass/0] not found"));
     }
 
     public void testDynamicNPE() {
@@ -254,9 +237,9 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
     public void testRCurlyNotDelim() {
         IllegalArgumentException e = expectScriptThrows(IllegalArgumentException.class, () -> {
             // We don't want PICKY here so we get the normal error message
-            exec("def i = 1} return 1", emptyMap(), emptyMap(), null, false);
+            exec("def i = 1} return 1", emptyMap(), emptyMap(), false);
         });
-        assertEquals("unexpected token ['}'] was expecting one of [<EOF>].", e.getMessage());
+        assertEquals("unexpected token ['}'] was expecting one of [{<EOF>, ';'}].", e.getMessage());
     }
 
     public void testBadBoxingCast() {
@@ -279,14 +262,14 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
     }
 
     public void testRegexDisabledByDefault() {
-        IllegalStateException e = expectThrows(IllegalStateException.class, () -> exec("return 'foo' ==~ /foo/"));
+        IllegalStateException e = expectScriptThrows(IllegalStateException.class, () -> exec("return 'foo' ==~ /foo/"));
         assertEquals("Regexes are disabled. Set [script.painless.regex.enabled] to [true] in elasticsearch.yaml to allow them. "
                 + "Be careful though, regexes break out of Painless's protection against deep recursion and long loops.", e.getMessage());
     }
 
     public void testCanNotOverrideRegexEnabled() {
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class,
-                () -> exec("", null, singletonMap(CompilerSettings.REGEX_ENABLED.getKey(), "true"), null, false));
+                () -> exec("", null, singletonMap(CompilerSettings.REGEX_ENABLED.getKey(), "true"), false));
         assertEquals("[painless.regex.enabled] can only be set on node startup.", e.getMessage());
     }
 
@@ -325,5 +308,48 @@ public class WhenThingsGoWrongTests extends ScriptTestCase {
         assertEquals("unexpected character ['].", e.getMessage());
         e = expectScriptThrows(IllegalArgumentException.class, () -> exec("'cat", false));
         assertEquals("unexpected character ['cat].", e.getMessage());
+    }
+
+    public void testNotAStatement() {
+        IllegalArgumentException iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("1 * 1; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from multiplication operation [*]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("boolean x = false; x && true; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from boolean and operation [&&]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("false; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: boolean constant [false] not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("boolean x = false; x == true; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from equals operation [==]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("boolean x = false; x ? 1 : 2; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from conditional operation [?:]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("1.1; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: decimal constant [1.1] not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("List x = null; x ?: [2]; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from elvis operation [?:]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("List x = null; (ArrayList)x; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from explicit cast with target type [ArrayList]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("List x = null; x instanceof List; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from instanceof with target type [List]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("[]; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from list initializer");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("[:]; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from map initializer");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("new int[] {1, 2}; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from new array");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("null; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: null constant not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("1; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: numeric constant [1] not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("/a/; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: regex constant [a] with flags [] not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("'1'; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: string constant [1] not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("+1; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result not used from addition operation [+]");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("boolean x; x; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: variable [x] not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("int[] x = new int[] {1}; x[0]; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result of brace operator not used");
+        iae = expectScriptThrows(IllegalArgumentException.class, () -> exec("Integer.MAX_VALUE; return null;"));
+        assertEquals(iae.getMessage(), "not a statement: result of dot operator [.] not used");
     }
 }

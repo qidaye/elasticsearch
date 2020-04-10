@@ -19,21 +19,20 @@
 
 package org.elasticsearch.painless.node;
 
-import org.elasticsearch.painless.Globals;
-import org.elasticsearch.painless.Locals;
 import org.elasticsearch.painless.Location;
-import org.elasticsearch.painless.MethodWriter;
+import org.elasticsearch.painless.Scope;
+import org.elasticsearch.painless.ir.ClassNode;
+import org.elasticsearch.painless.symbol.ScriptRoot;
 
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Represents an explicit cast.
  */
-public final class EExplicit extends AExpression {
+public class EExplicit extends AExpression {
 
-    private final String type;
-    private AExpression child;
+    protected final String type;
+    protected final AExpression child;
 
     public EExplicit(Location location, String type, AExpression child) {
         super(location);
@@ -43,39 +42,28 @@ public final class EExplicit extends AExpression {
     }
 
     @Override
-    void extractVariables(Set<String> variables) {
-        child.extractVariables(variables);
-    }
-
-    @Override
-    void analyze(Locals locals) {
-        try {
-            actual = locals.getDefinition().getType(type);
-        } catch (IllegalArgumentException exception) {
-            throw createError(new IllegalArgumentException("Not a type [" + this.type + "]."));
+    Output analyze(ClassNode classNode, ScriptRoot scriptRoot, Scope scope, Input input) {
+        if (input.read == false) {
+            throw createError(new IllegalArgumentException(
+                "not a statement: result not used from explicit cast with target type [" + type + "]"));
         }
 
-        child.expected = actual;
-        child.explicit = true;
-        child.analyze(locals);
-        child = child.cast(locals);
-    }
+        Output output = new Output();
 
-    @Override
-    void write(MethodWriter writer, Globals globals) {
-        throw createError(new IllegalStateException("Illegal tree structure."));
-    }
+        output.actual = scriptRoot.getPainlessLookup().canonicalTypeNameToType(type);
 
-    AExpression cast(Locals locals) {
-        child.expected = expected;
-        child.explicit = explicit;
-        child.internal = internal;
+        if (output.actual == null) {
+            throw createError(new IllegalArgumentException("Not a type [" + type + "]."));
+        }
 
-        return child.cast(locals);
-    }
+        Input childInput = new Input();
+        childInput.expected = output.actual;
+        childInput.explicit = true;
+        Output childOutput = child.analyze(classNode, scriptRoot, scope, childInput);
+        child.cast(childInput, childOutput);
 
-    @Override
-    public String toString() {
-        return singleLineToString(type, child);
+        output.expressionNode = child.cast(childOutput);
+
+        return output;
     }
 }

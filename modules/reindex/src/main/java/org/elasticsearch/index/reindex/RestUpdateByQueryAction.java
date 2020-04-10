@@ -20,10 +20,8 @@
 package org.elasticsearch.index.reindex;
 
 import org.elasticsearch.ElasticsearchParseException;
-import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.client.node.NodeClient;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.rest.RestController;
+import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptType;
@@ -32,6 +30,7 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -39,10 +38,14 @@ import static org.elasticsearch.rest.RestRequest.Method.POST;
 import static org.elasticsearch.script.Script.DEFAULT_SCRIPT_LANG;
 
 public class RestUpdateByQueryAction extends AbstractBulkByQueryRestHandler<UpdateByQueryRequest, UpdateByQueryAction> {
-    public RestUpdateByQueryAction(Settings settings, RestController controller) {
-        super(settings, UpdateByQueryAction.INSTANCE);
-        controller.registerHandler(POST, "/{index}/_update_by_query", this);
-        controller.registerHandler(POST, "/{index}/{type}/_update_by_query", this);
+
+    public RestUpdateByQueryAction() {
+        super(UpdateByQueryAction.INSTANCE);
+    }
+
+    @Override
+    public List<Route> routes() {
+        return List.of(new Route(POST, "/{index}/_update_by_query"));
     }
 
     @Override
@@ -56,18 +59,18 @@ public class RestUpdateByQueryAction extends AbstractBulkByQueryRestHandler<Upda
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     protected UpdateByQueryRequest buildRequest(RestRequest request) throws IOException {
         /*
          * Passing the search request through UpdateByQueryRequest first allows
          * it to set its own defaults which differ from SearchRequest's
          * defaults. Then the parse can override them.
          */
-        UpdateByQueryRequest internal = new UpdateByQueryRequest(new SearchRequest());
+        UpdateByQueryRequest internal = new UpdateByQueryRequest();
 
         Map<String, Consumer<Object>> consumers = new HashMap<>();
         consumers.put("conflicts", o -> internal.setConflicts((String) o));
         consumers.put("script", o -> internal.setScript(parseScript(o)));
+        consumers.put("max_docs", s -> setMaxDocsValidateIdentical(internal, ((Number) s).intValue()));
 
         parseInternalRequest(internal, request, consumers);
 
@@ -85,32 +88,32 @@ public class RestUpdateByQueryAction extends AbstractBulkByQueryRestHandler<Upda
             Map<String,Object> configMap = (Map<String, Object>) config;
             String script = null;
             ScriptType type = null;
-            String lang = DEFAULT_SCRIPT_LANG;
+            String lang = null;
             Map<String, Object> params = Collections.emptyMap();
             for (Iterator<Map.Entry<String, Object>> itr = configMap.entrySet().iterator(); itr.hasNext();) {
                 Map.Entry<String, Object> entry = itr.next();
                 String parameterName = entry.getKey();
                 Object parameterValue = entry.getValue();
-                if (Script.LANG_PARSE_FIELD.match(parameterName)) {
+                if (Script.LANG_PARSE_FIELD.match(parameterName, LoggingDeprecationHandler.INSTANCE)) {
                     if (parameterValue instanceof String || parameterValue == null) {
                         lang = (String) parameterValue;
                     } else {
                         throw new ElasticsearchParseException("Value must be of type String: [" + parameterName + "]");
                     }
-                } else if (Script.PARAMS_PARSE_FIELD.match(parameterName)) {
+                } else if (Script.PARAMS_PARSE_FIELD.match(parameterName, LoggingDeprecationHandler.INSTANCE)) {
                     if (parameterValue instanceof Map || parameterValue == null) {
                         params = (Map<String, Object>) parameterValue;
                     } else {
                         throw new ElasticsearchParseException("Value must be of type String: [" + parameterName + "]");
                     }
-                } else if (ScriptType.INLINE.getParseField().match(parameterName)) {
+                } else if (ScriptType.INLINE.getParseField().match(parameterName, LoggingDeprecationHandler.INSTANCE)) {
                     if (parameterValue instanceof String || parameterValue == null) {
                         script = (String) parameterValue;
                         type = ScriptType.INLINE;
                     } else {
                         throw new ElasticsearchParseException("Value must be of type String: [" + parameterName + "]");
                     }
-                } else if (ScriptType.STORED.getParseField().match(parameterName)) {
+                } else if (ScriptType.STORED.getParseField().match(parameterName, LoggingDeprecationHandler.INSTANCE)) {
                     if (parameterValue instanceof String || parameterValue == null) {
                         script = (String) parameterValue;
                         type = ScriptType.STORED;
@@ -125,7 +128,15 @@ public class RestUpdateByQueryAction extends AbstractBulkByQueryRestHandler<Upda
             }
             assert type != null : "if script is not null, type should definitely not be null";
 
-            return new Script(type, lang, script, params);
+            if (type == ScriptType.STORED) {
+                if (lang != null) {
+                    throw new IllegalArgumentException("lang cannot be specified for stored scripts");
+                }
+
+                return new Script(type, null, script, null, params);
+            } else {
+                return new Script(type, lang == null ? DEFAULT_SCRIPT_LANG : lang, script, params);
+            }
         } else {
             throw new IllegalArgumentException("Script value should be a String or a Map");
         }

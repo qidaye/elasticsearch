@@ -22,8 +22,9 @@ package org.elasticsearch.index.analysis;
 import org.apache.lucene.analysis.BaseTokenStreamTestCase;
 import org.apache.lucene.analysis.Tokenizer;
 import org.apache.lucene.analysis.core.WhitespaceTokenizer;
+import org.apache.lucene.analysis.phonetic.DaitchMokotoffSoundexFilter;
 import org.elasticsearch.Version;
-import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.plugin.analysis.AnalysisPhoneticPlugin;
@@ -44,7 +45,7 @@ public class SimplePhoneticAnalysisTests extends ESTestCase {
     public void setup() throws IOException {
         String yaml = "/org/elasticsearch/index/analysis/phonetic-1.yml";
         Settings settings = Settings.builder().loadFromStream(yaml, getClass().getResourceAsStream(yaml), false)
-                .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT)
+                .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
                 .build();
         this.analysis = createTestAnalysis(new Index("test", "_na_"), settings, new AnalysisPhoneticPlugin());
     }
@@ -72,4 +73,14 @@ public class SimplePhoneticAnalysisTests extends ESTestCase {
                 "rmba", "rmbalt", "rmbo", "rmbolt", "rmbu", "rmbult" };
         BaseTokenStreamTestCase.assertTokenStreamContents(filterFactory.create(tokenizer), expected);
     }
+
+    public void testPhoneticTokenFilterDaitchMotokoff() throws IOException {
+        TokenFilterFactory filterFactory = analysis.tokenFilter.get("daitch_mokotoff");
+        Tokenizer tokenizer = new WhitespaceTokenizer();
+        tokenizer.setReader(new StringReader("chauptman"));
+        String[] expected = new String[] { "473660", "573660" };
+        assertThat(filterFactory.create(tokenizer), instanceOf(DaitchMokotoffSoundexFilter.class));
+        BaseTokenStreamTestCase.assertTokenStreamContents(filterFactory.create(tokenizer), expected);
+    }
+
 }

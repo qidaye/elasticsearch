@@ -20,99 +20,61 @@
 package org.elasticsearch.painless.node;
 
 import org.elasticsearch.painless.AnalyzerCaster;
-import org.elasticsearch.painless.Definition;
-import org.elasticsearch.painless.Definition.Cast;
-import org.elasticsearch.painless.Definition.Type;
-import org.elasticsearch.painless.Globals;
-import org.elasticsearch.painless.Locals;
-import org.elasticsearch.painless.Locals.Variable;
 import org.elasticsearch.painless.Location;
-import org.elasticsearch.painless.MethodWriter;
-import org.objectweb.asm.Label;
-import org.objectweb.asm.Opcodes;
+import org.elasticsearch.painless.Scope;
+import org.elasticsearch.painless.Scope.Variable;
+import org.elasticsearch.painless.ir.BlockNode;
+import org.elasticsearch.painless.ir.ClassNode;
+import org.elasticsearch.painless.ir.ForEachSubArrayNode;
+import org.elasticsearch.painless.lookup.PainlessCast;
+import org.elasticsearch.painless.symbol.ScriptRoot;
 
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Represents a for-each loop for arrays.
  */
-final class SSubEachArray extends AStatement {
-    private final Variable variable;
-    private AExpression expression;
-    private final SBlock block;
+public class SSubEachArray extends AStatement {
 
-    private Cast cast = null;
-    private Variable array = null;
-    private Variable index = null;
-    private Type indexed = null;
+    protected final Variable variable;
+    protected final AExpression.Output expressionOutput;
+    protected final Output blockOutput;
 
-    SSubEachArray(Location location, Variable variable, AExpression expression, SBlock block) {
+    SSubEachArray(Location location, Variable variable, AExpression.Output expressionOutput, Output blockOutput) {
         super(location);
 
         this.variable = Objects.requireNonNull(variable);
-        this.expression = Objects.requireNonNull(expression);
-        this.block = block;
+        this.expressionOutput = Objects.requireNonNull(expressionOutput);
+        this.blockOutput = blockOutput;
     }
 
     @Override
-    void extractVariables(Set<String> variables) {
-        throw createError(new IllegalStateException("Illegal tree structure."));
-    }
+    Output analyze(ClassNode classNode, ScriptRoot scriptRoot, Scope scope, Input input) {
+        Output output = new Output();
 
-    @Override
-    void analyze(Locals locals) {
         // We must store the array and index as variables for securing slots on the stack, and
         // also add the location offset to make the names unique in case of nested for each loops.
-        array = locals.addVariable(location, expression.actual, "#array" + location.getOffset(),
-                true);
-        index = locals.addVariable(location, locals.getDefinition().intType, "#index" + location.getOffset(),
-                true);
-        indexed = locals.getDefinition().getType(expression.actual.struct,
-                expression.actual.dimensions - 1);
-        cast = locals.getDefinition().caster.getLegalCast(location, indexed, variable.type, true, true);
-    }
+        Variable array = scope.defineVariable(location, expressionOutput.actual, "#array" + location.getOffset(), true);
+        Variable index = scope.defineVariable(location, int.class, "#index" + location.getOffset(), true);
+        Class<?> indexed = expressionOutput.actual.getComponentType();
+        PainlessCast cast = AnalyzerCaster.getLegalCast(location, indexed, variable.getType(), true, true);
 
-    @Override
-    void write(MethodWriter writer, Globals globals) {
-        writer.writeStatementOffset(location);
+        ForEachSubArrayNode forEachSubArrayNode = new ForEachSubArrayNode();
+        forEachSubArrayNode.setConditionNode(expressionOutput.expressionNode);
+        forEachSubArrayNode.setBlockNode((BlockNode)blockOutput.statementNode);
+        forEachSubArrayNode.setLocation(location);
+        forEachSubArrayNode.setVariableType(variable.getType());
+        forEachSubArrayNode.setVariableName(variable.getName());
+        forEachSubArrayNode.setCast(cast);
+        forEachSubArrayNode.setArrayType(array.getType());
+        forEachSubArrayNode.setArrayName(array.getName());
+        forEachSubArrayNode.setIndexType(index.getType());
+        forEachSubArrayNode.setIndexName(index.getName());
+        forEachSubArrayNode.setIndexedType(indexed);
+        forEachSubArrayNode.setContinuous(false);
 
-        expression.write(writer, globals);
-        writer.visitVarInsn(array.type.type.getOpcode(Opcodes.ISTORE), array.getSlot());
-        writer.push(-1);
-        writer.visitVarInsn(index.type.type.getOpcode(Opcodes.ISTORE), index.getSlot());
+        output.statementNode = forEachSubArrayNode;
 
-        Label begin = new Label();
-        Label end = new Label();
-
-        writer.mark(begin);
-
-        writer.visitIincInsn(index.getSlot(), 1);
-        writer.visitVarInsn(index.type.type.getOpcode(Opcodes.ILOAD), index.getSlot());
-        writer.visitVarInsn(array.type.type.getOpcode(Opcodes.ILOAD), array.getSlot());
-        writer.arrayLength();
-        writer.ifICmp(MethodWriter.GE, end);
-
-        writer.visitVarInsn(array.type.type.getOpcode(Opcodes.ILOAD), array.getSlot());
-        writer.visitVarInsn(index.type.type.getOpcode(Opcodes.ILOAD), index.getSlot());
-        writer.arrayLoad(indexed.type);
-        writer.writeCast(cast);
-        writer.visitVarInsn(variable.type.type.getOpcode(Opcodes.ISTORE), variable.getSlot());
-
-        if (loopCounter != null) {
-            writer.writeLoopCounter(loopCounter.getSlot(), statementCount, location);
-        }
-
-        block.continu = begin;
-        block.brake = end;
-        block.write(writer, globals);
-
-        writer.goTo(begin);
-        writer.mark(end);
-    }
-
-    @Override
-    public String toString() {
-        return singleLineToString(variable.type.name, variable.name, expression, block);
+        return output;
     }
 }
